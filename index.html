@@ -202,8 +202,8 @@
       <div class="title">REEF<span class="accent">RUNNER</span></div>
       <div class="subtitle">You're a hungry little fish. Eat all the plankton. Dodge the jellyfish. Snag a glowing pearl to turn the tables and chomp them back.</div>
       <div class="controls-grid">
-        <b>Move:</b><span>arrow keys / WASD</span>
-        <b>Mobile:</b><span>swipe in any direction</span>
+        <b>Move:</b><span>hold arrow keys / WASD</span>
+        <b>Mobile:</b><span>swipe and hold</span>
       </div>
       <button class="btn" id="startBtn">DIVE IN</button>
     </div>
@@ -360,8 +360,9 @@
       y: pSpawn.r * TILE + TILE / 2,
       dir: 2,
       nextDir: 2,
-      speed: 2,
-      mouth: 0
+      speed: 1.4,
+      mouth: 0,
+      moving: false
     };
 
     const colors = ['#ff6b6b', '#c77dff', '#06d6a0', '#ffd166'];
@@ -373,7 +374,7 @@
         y: s.r * TILE + TILE / 2,
         homeR: s.r, homeC: s.c,
         dir: Math.floor(Math.random() * 4),
-        speed: 1.6 + level * 0.1,
+        speed: 1.1 + level * 0.08,
         color: colors[i % colors.length],
         scared: false,
         eaten: false,
@@ -406,30 +407,60 @@
     ArrowRight: 0, ArrowDown: 1, ArrowLeft: 2, ArrowUp: 3,
     d: 0, s: 1, a: 2, w: 3, D: 0, S: 1, A: 2, W: 3
   };
+  // Track held keys. Most recently pressed wins so quick direction changes feel responsive.
+  const heldKeys = new Set();
+  const keyHistory = []; // ordered list of currently-held direction keys
+
   window.addEventListener('keydown', e => {
     if (e.key in keyToDir) {
-      player && (player.nextDir = keyToDir[e.key]);
+      if (!heldKeys.has(e.key)) {
+        heldKeys.add(e.key);
+        keyHistory.push(e.key);
+      }
       if (['ArrowRight','ArrowDown','ArrowLeft','ArrowUp'].includes(e.key)) e.preventDefault();
     }
   });
+  window.addEventListener('keyup', e => {
+    if (e.key in keyToDir) {
+      heldKeys.delete(e.key);
+      const idx = keyHistory.indexOf(e.key);
+      if (idx !== -1) keyHistory.splice(idx, 1);
+    }
+  });
+  // safety: clear keys if window loses focus (avoids stuck movement)
+  window.addEventListener('blur', () => { heldKeys.clear(); keyHistory.length = 0; });
 
-  // touch swipe
+  // touch: swipe sets a held direction; tap-and-hold keeps moving.
+  // We use a simple model — start touch picks dir from initial drag, holding keeps it.
+  let touchDir = null;
   let touchStart = null;
   canvas.addEventListener('touchstart', e => {
     const t = e.touches[0];
     touchStart = { x: t.clientX, y: t.clientY };
   });
-  canvas.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
-  canvas.addEventListener('touchend', e => {
+  canvas.addEventListener('touchmove', e => {
     if (!touchStart) return;
-    const t = e.changedTouches[0];
+    const t = e.touches[0];
     const dx = t.clientX - touchStart.x;
     const dy = t.clientY - touchStart.y;
-    if (Math.abs(dx) < 20 && Math.abs(dy) < 20) return;
-    if (Math.abs(dx) > Math.abs(dy)) player.nextDir = dx > 0 ? 0 : 2;
-    else player.nextDir = dy > 0 ? 1 : 3;
+    if (Math.abs(dx) < 15 && Math.abs(dy) < 15) return;
+    if (Math.abs(dx) > Math.abs(dy)) touchDir = dx > 0 ? 0 : 2;
+    else touchDir = dy > 0 ? 1 : 3;
+    e.preventDefault();
+  }, { passive: false });
+  canvas.addEventListener('touchend', () => {
     touchStart = null;
+    touchDir = null;
   });
+
+  function getRequestedDir() {
+    // priority: most recently pressed key, else active touch, else null (= stop)
+    if (keyHistory.length > 0) {
+      return keyToDir[keyHistory[keyHistory.length - 1]];
+    }
+    if (touchDir !== null) return touchDir;
+    return null;
+  }
 
   // === UPDATE ===
   function update() {
@@ -444,22 +475,42 @@
   }
 
   function updatePlayer() {
-    // try to switch direction at tile centers
-    if (canMove(player, player.nextDir)) {
-      // but only when reasonably aligned
+    const requested = getRequestedDir();
+
+    if (requested === null) {
+      // No key held — stop moving.
+      player.moving = false;
+      // Snap to nearest tile center so we look tidy when stopped (and so direction changes from rest are clean)
       const cx = player.x % TILE;
       const cy = player.y % TILE;
-      const nearCenter = Math.abs(cx - TILE / 2) < player.speed * 1.5 && Math.abs(cy - TILE / 2) < player.speed * 1.5;
-      if (nearCenter || player.nextDir === player.dir) {
-        if (player.nextDir !== player.dir) snapToTile(player);
-        player.dir = player.nextDir;
+      // only nudge gently — fully snap if very close
+      if (Math.abs(cx - TILE / 2) < player.speed * 1.2 && Math.abs(cy - TILE / 2) < player.speed * 1.2) {
+        snapToTile(player);
       }
-    }
-
-    if (canMove(player, player.dir)) {
-      player.x += DIRS[player.dir].x * player.speed;
-      player.y += DIRS[player.dir].y * player.speed;
-      player.mouth += 0.25;
+    } else {
+      // try to honor the requested direction
+      if (requested !== player.dir) {
+        // allow turning if the next tile in that direction is open AND we're roughly tile-aligned
+        const cx = player.x % TILE;
+        const cy = player.y % TILE;
+        const nearCenter = Math.abs(cx - TILE / 2) < player.speed * 1.5
+                        && Math.abs(cy - TILE / 2) < player.speed * 1.5;
+        // 180° reversals are always allowed (no need to be aligned)
+        const isReverse = requested === (player.dir + 2) % 4;
+        if ((nearCenter && canMove(player, requested)) || isReverse) {
+          if (nearCenter) snapToTile(player);
+          player.dir = requested;
+        }
+      }
+      // move forward if the path is clear
+      if (canMove(player, player.dir)) {
+        player.x += DIRS[player.dir].x * player.speed;
+        player.y += DIRS[player.dir].y * player.speed;
+        player.mouth += 0.25;
+        player.moving = true;
+      } else {
+        player.moving = false;
+      }
     }
 
     // tunnel wrap
@@ -522,21 +573,27 @@
   function updateJellies() {
     jellies.forEach(j => {
       j.wobble += 0.15;
-      const speed = j.eaten ? 3 : (j.scared ? j.speed * 0.6 : j.speed);
+      const speed = j.eaten ? 2.4 : (j.scared ? j.speed * 0.55 : j.speed);
 
-      // Choose direction at tile centers
-      const cx = j.x % TILE;
-      const cy = j.y % TILE;
-      const atCenter = Math.abs(cx - TILE / 2) < speed && Math.abs(cy - TILE / 2) < speed;
+      // Decide on direction whenever we enter a new tile (this is robust against
+      // floating-point drift that broke the previous "at exact center" check).
+      const curTileC = Math.floor(j.x / TILE);
+      const curTileR = Math.floor(j.y / TILE);
+      if (j.lastTileC === undefined) { j.lastTileC = curTileC; j.lastTileR = curTileR; }
+      const enteredNewTile = (curTileC !== j.lastTileC || curTileR !== j.lastTileR);
 
-      if (atCenter) {
+      if (enteredNewTile) {
+        j.lastTileC = curTileC;
+        j.lastTileR = curTileR;
+        // snap to the center of the tile we just entered to keep movement gridded
         snapToTile(j);
+
         // possible directions (no reversing unless dead-end)
         const opposite = (j.dir + 2) % 4;
         let options = [0, 1, 2, 3].filter(d => d !== opposite && canMove(j, d));
         if (options.length === 0) options = [opposite];
 
-        // pick a target tile
+        // pick a target tile based on personality / mode
         let target;
         if (j.eaten) {
           target = { x: j.homeC * TILE + TILE / 2, y: j.homeR * TILE + TILE / 2 };
@@ -546,56 +603,61 @@
             j.scared = false;
           }
         } else if (j.scared) {
-          // run away from player
+          // run away from player — target is the mirror point
           target = { x: 2 * j.x - player.x, y: 2 * j.y - player.y };
-        } else {
-          // each personality targets differently
-          if (j.personality === 0) {
-            target = { x: player.x, y: player.y };
-          } else if (j.personality === 1) {
-            // ambush — aim 4 tiles ahead of player
-            target = {
-              x: player.x + DIRS[player.dir].x * TILE * 4,
-              y: player.y + DIRS[player.dir].y * TILE * 4
-            };
-          } else if (j.personality === 2) {
-            // random-ish
-            if (Math.random() < 0.4) {
-              j.dir = options[Math.floor(Math.random() * options.length)];
-              j.x += DIRS[j.dir].x * speed;
-              j.y += DIRS[j.dir].y * speed;
-              return;
-            }
-            target = { x: player.x, y: player.y };
+        } else if (j.personality === 0) {
+          // direct chaser
+          target = { x: player.x, y: player.y };
+        } else if (j.personality === 1) {
+          // ambush — aim 4 tiles ahead of player
+          target = {
+            x: player.x + DIRS[player.dir].x * TILE * 4,
+            y: player.y + DIRS[player.dir].y * TILE * 4
+          };
+        } else if (j.personality === 2) {
+          // wanderer — random pick most of the time, occasional chase
+          if (Math.random() < 0.55) {
+            j.dir = options[Math.floor(Math.random() * options.length)];
+            // skip the targeting code below
+            target = null;
           } else {
-            // patrol corner unless close
-            const dist = Math.hypot(j.x - player.x, j.y - player.y);
-            target = dist < TILE * 6
-              ? { x: 0, y: H }
-              : { x: player.x, y: player.y };
+            target = { x: player.x, y: player.y };
           }
+        } else {
+          // patroller — corner unless player is close
+          const dist = Math.hypot(j.x - player.x, j.y - player.y);
+          target = dist < TILE * 6
+            ? { x: 0, y: H }
+            : { x: player.x, y: player.y };
         }
 
-        // pick option closest to target
-        let best = options[0], bestDist = Infinity;
-        for (const d of options) {
-          const nx = j.x + DIRS[d].x * TILE;
-          const ny = j.y + DIRS[d].y * TILE;
-          const dx = nx - target.x, dy = ny - target.y;
-          const dist = dx*dx + dy*dy;
-          if (dist < bestDist) { bestDist = dist; best = d; }
+        if (target !== null) {
+          // pick the option whose resulting tile is closest to the target
+          let best = options[0], bestDist = Infinity;
+          for (const d of options) {
+            const nx = j.x + DIRS[d].x * TILE;
+            const ny = j.y + DIRS[d].y * TILE;
+            const dx = nx - target.x, dy = ny - target.y;
+            const dist = dx*dx + dy*dy;
+            if (dist < bestDist) { bestDist = dist; best = d; }
+          }
+          j.dir = best;
         }
-        j.dir = best;
       }
 
+      // move along current direction; if blocked, force a re-decision next frame by pretending we entered a new tile
       if (canMove(j, j.dir)) {
         j.x += DIRS[j.dir].x * speed;
         j.y += DIRS[j.dir].y * speed;
+      } else {
+        // shouldn't normally happen because we picked from canMove options, but guard anyway
+        snapToTile(j);
+        j.lastTileC = undefined; // force re-decision
       }
 
       // tunnel wrap
-      if (j.x < 0) j.x = W - 1;
-      else if (j.x > W) j.x = 1;
+      if (j.x < 0) { j.x = W - 1; j.lastTileC = undefined; }
+      else if (j.x > W) { j.x = 1; j.lastTileC = undefined; }
     });
   }
 

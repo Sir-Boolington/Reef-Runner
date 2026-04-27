@@ -7,8 +7,8 @@ A Pac-Man-inspired game with an underwater theme. You're a hungry little fish na
 Open `index.html` in any modern browser. No build step, no dependencies.
 
 **Controls**
-- Arrow keys or WASD to move
-- On mobile: swipe in any direction
+- Hold arrow keys or WASD to swim — release to stop
+- On mobile: swipe and hold; release to stop
 
 **Mechanics**
 - Eat all yellow plankton to clear the level
