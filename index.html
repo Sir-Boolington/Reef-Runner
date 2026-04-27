@@ -360,7 +360,7 @@
       y: pSpawn.r * TILE + TILE / 2,
       dir: 2,
       nextDir: 2,
-      speed: 1.4,
+      speed: 0.9,
       mouth: 0,
       moving: false
     };
@@ -374,16 +374,31 @@
         y: s.r * TILE + TILE / 2,
         homeR: s.r, homeC: s.c,
         dir: Math.floor(Math.random() * 4),
-        speed: 1.1 + level * 0.08,
+        speed: 0.41 + level * 0.04,
         color: colors[i % colors.length],
         scared: false,
         eaten: false,
+        respawnTimer: 0,        // counts down while waiting at home before re-emerging
+        lostSightTimer: 0,      // frames remaining of "I just saw you, still hunting" memory
+        lastSeenX: 0,           // player position when last spotted
+        lastSeenY: 0,
+        mode: 'wander',         // 'wander' | 'chase' | 'hunt' | 'scared' | 'eaten'
         wobble: Math.random() * Math.PI * 2,
-        personality: i // 0=chaser, 1=ambush, 2=random, 3=patrol
+        personality: i          // 0=chaser, 1=ambush, 2=random, 3=patrol
       });
     }
 
     particles = [];
+
+    // Make sure each jellyfish starts facing a valid (non-wall) direction.
+    // If we leave dir as a random pick, it can point straight into a wall and
+    // the entity will sit motionless forever (since "new tile entered" never fires).
+    jellies.forEach(j => {
+      const valid = [0, 1, 2, 3].filter(d => canMove(j, d));
+      if (valid.length > 0) {
+        j.dir = valid[Math.floor(Math.random() * valid.length)];
+      }
+    });
   }
 
   function startLevel(reset = false) {
@@ -539,12 +554,15 @@
 
     // collisions with jellies
     jellies.forEach(j => {
+      // skip while waiting to respawn (they're inert)
+      if (j.respawnTimer > 0) return;
       const dx = j.x - player.x, dy = j.y - player.y;
       if (dx*dx + dy*dy < (TILE * 0.7) ** 2) {
         if (j.eaten) return;
         if (j.scared) {
           j.eaten = true;
           j.scared = false;
+          j.lastTileC = undefined; // force fresh decision toward home
           score += 200;
           burst(j.x, j.y, j.color, 24);
           updateHUD();
@@ -570,13 +588,77 @@
     }
   }
 
+  // Line of sight: returns true if a straight line from (x1,y1) to (x2,y2)
+  // doesn't cross any wall tiles. Uses small step sampling — simple and fast.
+  function hasLineOfSight(x1, y1, x2, y2) {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const dist = Math.hypot(dx, dy);
+    if (dist === 0) return true;
+    const steps = Math.ceil(dist / (TILE * 0.4));
+    for (let i = 1; i < steps; i++) {
+      const t = i / steps;
+      const x = x1 + dx * t;
+      const y = y1 + dy * t;
+      const c = Math.floor(x / TILE);
+      const r = Math.floor(y / TILE);
+      if (isWall(c, r)) return false;
+    }
+    return true;
+  }
+
   function updateJellies() {
     jellies.forEach(j => {
       j.wobble += 0.15;
-      const speed = j.eaten ? 2.4 : (j.scared ? j.speed * 0.55 : j.speed);
 
-      // Decide on direction whenever we enter a new tile (this is robust against
-      // floating-point drift that broke the previous "at exact center" check).
+      // === Respawn handling ===
+      // If eaten and waiting at home, count down then re-emerge
+      if (j.respawnTimer > 0) {
+        j.respawnTimer--;
+        if (j.respawnTimer === 0) {
+          j.eaten = false;
+          j.scared = false;
+          j.mode = 'wander';
+          j.lastTileC = undefined; // force fresh decision
+          burst(j.x, j.y, j.color, 16);
+        }
+        return; // skip movement while waiting
+      }
+
+      // === Determine current mode ===
+      // Eaten always overrides — head home.
+      // Scared overrides chase/wander but not eaten.
+      // Otherwise: line of sight check, with a memory window after losing sight.
+      if (j.eaten) {
+        j.mode = 'eaten';
+      } else if (j.scared) {
+        j.mode = 'scared';
+      } else {
+        const sight = hasLineOfSight(j.x, j.y, player.x, player.y);
+        if (sight) {
+          // refresh memory whenever we can see the player
+          j.lostSightTimer = 60 * 3; // 3 seconds of memory after losing sight
+          j.lastSeenX = player.x;
+          j.lastSeenY = player.y;
+          j.mode = 'chase';
+        } else if (j.lostSightTimer > 0) {
+          j.lostSightTimer--;
+          j.mode = 'hunt'; // still pushing toward last known position
+        } else {
+          j.mode = 'wander';
+        }
+      }
+
+      // Speeds per mode
+      const baseSpeed =
+        j.mode === 'eaten'  ? Math.max(0.9, j.speed * 3)
+        : j.mode === 'scared' ? j.speed * 0.55
+        : j.mode === 'chase'  ? j.speed * 1.15
+        : j.mode === 'hunt'   ? j.speed * 1.0   // pursuing last known position
+        : j.mode === 'wander' ? j.speed * 0.85
+        : j.speed;
+
+      // === Decide direction on tile transitions ===
       const curTileC = Math.floor(j.x / TILE);
       const curTileR = Math.floor(j.y / TILE);
       if (j.lastTileC === undefined) { j.lastTileC = curTileC; j.lastTileR = curTileR; }
@@ -585,7 +667,6 @@
       if (enteredNewTile) {
         j.lastTileC = curTileC;
         j.lastTileR = curTileR;
-        // snap to the center of the tile we just entered to keep movement gridded
         snapToTile(j);
 
         // possible directions (no reversing unless dead-end)
@@ -593,46 +674,66 @@
         let options = [0, 1, 2, 3].filter(d => d !== opposite && canMove(j, d));
         if (options.length === 0) options = [opposite];
 
-        // pick a target tile based on personality / mode
-        let target;
-        if (j.eaten) {
+        let target = null;
+
+        if (j.mode === 'eaten') {
           target = { x: j.homeC * TILE + TILE / 2, y: j.homeR * TILE + TILE / 2 };
-          // arrived home? respawn
-          if (Math.abs(j.x - target.x) < TILE && Math.abs(j.y - target.y) < TILE) {
-            j.eaten = false;
-            j.scared = false;
+          // arrived home? start respawn timer
+          const homeDist = Math.hypot(j.x - target.x, j.y - target.y);
+          if (homeDist < TILE * 0.6) {
+            j.respawnTimer = 60 * 4; // 4 seconds before re-emerging
+            return;
           }
-        } else if (j.scared) {
-          // run away from player — target is the mirror point
+        } else if (j.mode === 'scared') {
+          // flee — mirror point through self away from player
           target = { x: 2 * j.x - player.x, y: 2 * j.y - player.y };
-        } else if (j.personality === 0) {
-          // direct chaser
-          target = { x: player.x, y: player.y };
-        } else if (j.personality === 1) {
-          // ambush — aim 4 tiles ahead of player
-          target = {
-            x: player.x + DIRS[player.dir].x * TILE * 4,
-            y: player.y + DIRS[player.dir].y * TILE * 4
-          };
-        } else if (j.personality === 2) {
-          // wanderer — random pick most of the time, occasional chase
-          if (Math.random() < 0.55) {
+        } else if (j.mode === 'hunt') {
+          // converge on last known position (no personality variation —
+          // they don't know where you went, just where you were)
+          target = { x: j.lastSeenX, y: j.lastSeenY };
+          // if we've reached the last-seen spot, fall through to wander next frame
+          const dist = Math.hypot(j.x - j.lastSeenX, j.y - j.lastSeenY);
+          if (dist < TILE * 0.8) j.lostSightTimer = 0;
+        } else if (j.mode === 'chase') {
+          // each personality chases differently — but they all know where you are
+          if (j.personality === 0) {
+            // direct
+            target = { x: player.x, y: player.y };
+          } else if (j.personality === 1) {
+            // ambush — aim 4 tiles ahead of player's current direction
+            target = {
+              x: player.x + DIRS[player.dir].x * TILE * 4,
+              y: player.y + DIRS[player.dir].y * TILE * 4
+            };
+          } else if (j.personality === 2) {
+            // flanker — pick a side based on player's facing
+            const perpX = DIRS[(player.dir + 1) % 4].x;
+            const perpY = DIRS[(player.dir + 1) % 4].y;
+            target = {
+              x: player.x + perpX * TILE * 3,
+              y: player.y + perpY * TILE * 3
+            };
+          } else {
+            // bruiser — straight chase but slightly biased toward cutting you off
+            target = {
+              x: player.x + DIRS[player.dir].x * TILE * 2,
+              y: player.y + DIRS[player.dir].y * TILE * 2
+            };
+          }
+        } else {
+          // WANDER — pick direction with some randomness, occasionally drift toward player
+          // Most of the time pure random, sometimes nudge toward player so they don't get
+          // permanently stuck on the far side of the maze.
+          if (Math.random() < 0.7) {
             j.dir = options[Math.floor(Math.random() * options.length)];
-            // skip the targeting code below
             target = null;
           } else {
             target = { x: player.x, y: player.y };
           }
-        } else {
-          // patroller — corner unless player is close
-          const dist = Math.hypot(j.x - player.x, j.y - player.y);
-          target = dist < TILE * 6
-            ? { x: 0, y: H }
-            : { x: player.x, y: player.y };
         }
 
         if (target !== null) {
-          // pick the option whose resulting tile is closest to the target
+          // pick option whose resulting tile is closest to target
           let best = options[0], bestDist = Infinity;
           for (const d of options) {
             const nx = j.x + DIRS[d].x * TILE;
@@ -645,14 +746,49 @@
         }
       }
 
-      // move along current direction; if blocked, force a re-decision next frame by pretending we entered a new tile
-      if (canMove(j, j.dir)) {
-        j.x += DIRS[j.dir].x * speed;
-        j.y += DIRS[j.dir].y * speed;
-      } else {
-        // shouldn't normally happen because we picked from canMove options, but guard anyway
+      // === Move ===
+      // If the current direction is blocked, we need to make a fresh decision
+      // RIGHT NOW (not next frame), otherwise the jellyfish gets stuck:
+      // setting lastTileC=undefined doesn't help because the next frame's
+      // "entered new tile" check immediately re-initializes it without firing
+      // the decision branch.
+      if (!canMove(j, j.dir)) {
         snapToTile(j);
-        j.lastTileC = undefined; // force re-decision
+        // pick any valid direction (allow reversing here since we're blocked)
+        const valid = [0, 1, 2, 3].filter(d => canMove(j, d));
+        if (valid.length > 0) {
+          // Prefer non-reverse, but reverse is fine if it's the only option
+          const opp = (j.dir + 2) % 4;
+          const nonReverse = valid.filter(d => d !== opp);
+          const pool = nonReverse.length > 0 ? nonReverse : valid;
+
+          // If we have a real target (chase/hunt/scared), pick the option
+          // closest to it. Otherwise random.
+          let target = null;
+          if (j.mode === 'chase')      target = { x: player.x, y: player.y };
+          else if (j.mode === 'hunt')  target = { x: j.lastSeenX, y: j.lastSeenY };
+          else if (j.mode === 'scared') target = { x: 2 * j.x - player.x, y: 2 * j.y - player.y };
+          else if (j.mode === 'eaten')  target = { x: j.homeC * TILE + TILE / 2, y: j.homeR * TILE + TILE / 2 };
+
+          if (target) {
+            let best = pool[0], bestDist = Infinity;
+            for (const d of pool) {
+              const nx = j.x + DIRS[d].x * TILE;
+              const ny = j.y + DIRS[d].y * TILE;
+              const dist = (nx - target.x) ** 2 + (ny - target.y) ** 2;
+              if (dist < bestDist) { bestDist = dist; best = d; }
+            }
+            j.dir = best;
+          } else {
+            j.dir = pool[Math.floor(Math.random() * pool.length)];
+          }
+        }
+      }
+
+      // Now do the actual move
+      if (canMove(j, j.dir)) {
+        j.x += DIRS[j.dir].x * baseSpeed;
+        j.y += DIRS[j.dir].y * baseSpeed;
       }
 
       // tunnel wrap
@@ -818,6 +954,29 @@
     jellies.forEach(j => {
       const r = TILE * 0.42;
       const wob = Math.sin(j.wobble) * 2;
+
+      // Respawning — show a pulsing reform animation at home
+      if (j.respawnTimer > 0) {
+        const t = 1 - j.respawnTimer / (60 * 4); // 0 -> 1 as timer counts down
+        const pulse = 0.5 + Math.sin(frame * 0.3) * 0.4;
+        const alpha = 0.15 + t * 0.5;
+        const g = ctx.createRadialGradient(j.x, j.y, 0, j.x, j.y, r * 2);
+        g.addColorStop(0, j.color);
+        g.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.globalAlpha = alpha * pulse;
+        ctx.fillStyle = g;
+        ctx.fillRect(j.x - r * 2, j.y - r * 2, r * 4, r * 4);
+        // outline ring
+        ctx.globalAlpha = 0.4 + t * 0.4;
+        ctx.strokeStyle = j.color;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(j.x, j.y, r * (0.4 + t * 0.6), 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+        return;
+      }
+
       const flashing = j.scared && powerTimer < 120 && Math.floor(frame / 10) % 2 === 0;
       const bodyColor = j.eaten ? 'rgba(224, 251, 252, 0.3)'
         : j.scared ? (flashing ? '#f7f7ff' : '#3a86ff')
