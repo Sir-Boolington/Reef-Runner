@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Reef Runner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bungee&family=Quicksand:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --deep: #02132b;
+    --mid: #0a3d62;
+    --shallow: #0fa3b1;
+    --coral: #ff6b6b;
+    --pearl: #f7f7ff;
+    --plankton: #ffd166;
+    --kelp: #06d6a0;
+    --jelly: #c77dff;
+    --warn: #ff4d6d;
+    --text: #e0fbfc;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    height: 100%;
+    overflow: hidden;
+    color: var(--text);
+    font-family: 'Quicksand', sans-serif;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background:
+      radial-gradient(ellipse at 30% 0%, rgba(15, 163, 177, 0.4) 0%, transparent 50%),
+      radial-gradient(ellipse at 70% 100%, rgba(199, 125, 255, 0.2) 0%, transparent 50%),
+      linear-gradient(180deg, var(--mid) 0%, var(--deep) 100%);
+    padding: 12px;
+  }
+
+  .frame {
+    width: min(100%, 680px);
+    position: relative;
+    border-radius: 16px;
+    background: var(--deep);
+    overflow: hidden;
+    box-shadow:
+      0 0 0 3px var(--shallow),
+      0 0 60px rgba(15, 163, 177, 0.4),
+      inset 0 0 80px rgba(2, 19, 43, 0.6);
+  }
+
+  .hud {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 18px;
+    background: rgba(2, 19, 43, 0.6);
+    border-bottom: 2px solid var(--shallow);
+    font-family: 'Bungee', cursive;
+    letter-spacing: 1px;
+  }
+
+  .hud-block { display: flex; flex-direction: column; gap: 2px; }
+  .hud-block.right { align-items: flex-end; }
+  .hud .label { font-size: 10px; color: var(--shallow); }
+  .hud .value { font-size: 20px; color: var(--plankton); }
+  .hud .lives { font-size: 18px; color: var(--coral); letter-spacing: 4px; }
+
+  canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+    background: var(--deep);
+  }
+
+  .overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(2, 19, 43, 0.94);
+    backdrop-filter: blur(4px);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    z-index: 3;
+    padding: 24px;
+    transition: opacity 0.3s;
+  }
+
+  .overlay.hidden { opacity: 0; pointer-events: none; }
+
+  .title {
+    font-family: 'Bungee', cursive;
+    font-size: clamp(32px, 7vw, 56px);
+    color: var(--plankton);
+    line-height: 0.9;
+    margin-bottom: 8px;
+    text-shadow:
+      0 0 20px rgba(255, 209, 102, 0.6),
+      4px 4px 0 var(--coral);
+  }
+
+  .title .accent { color: var(--shallow); display: block; }
+
+  .subtitle {
+    font-size: 16px;
+    color: var(--text);
+    margin-bottom: 24px;
+    max-width: 380px;
+    line-height: 1.5;
+  }
+
+  .controls-grid {
+    display: grid;
+    grid-template-columns: auto auto;
+    gap: 8px 16px;
+    margin-bottom: 28px;
+    font-size: 14px;
+    color: var(--shallow);
+  }
+  .controls-grid b { color: var(--text); font-weight: 700; }
+
+  .btn {
+    font-family: 'Bungee', cursive;
+    font-size: 16px;
+    background: var(--plankton);
+    color: var(--deep);
+    border: none;
+    padding: 14px 32px;
+    cursor: pointer;
+    letter-spacing: 2px;
+    border-radius: 32px;
+    transition: transform 0.15s, box-shadow 0.15s;
+    box-shadow: 0 6px 0 var(--coral), 0 8px 20px rgba(0,0,0,0.3);
+  }
+  .btn:hover { transform: translateY(-2px); box-shadow: 0 8px 0 var(--coral), 0 12px 24px rgba(0,0,0,0.3); }
+  .btn:active { transform: translateY(4px); box-shadow: 0 2px 0 var(--coral); }
+
+  .final-score {
+    font-family: 'Bungee', cursive;
+    font-size: 56px;
+    color: var(--plankton);
+    margin: 8px 0 24px;
+    text-shadow: 0 0 30px rgba(255, 209, 102, 0.5);
+  }
+
+  .badge {
+    display: inline-block;
+    padding: 4px 12px;
+    background: var(--shallow);
+    color: var(--deep);
+    font-family: 'Bungee', cursive;
+    font-size: 12px;
+    border-radius: 12px;
+    margin-bottom: 16px;
+  }
+
+  /* bubbles for ambient flair */
+  .bubble {
+    position: absolute;
+    bottom: -20px;
+    border-radius: 50%;
+    background: rgba(224, 251, 252, 0.2);
+    border: 1px solid rgba(224, 251, 252, 0.3);
+    animation: rise linear infinite;
+    pointer-events: none;
+    z-index: 1;
+  }
+  @keyframes rise {
+    to { transform: translateY(-110vh); opacity: 0; }
+  }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <div class="hud">
+      <div class="hud-block">
+        <div class="label">SCORE</div>
+        <div class="value" id="score">0</div>
+      </div>
+      <div class="hud-block" style="align-items:center">
+        <div class="label">LEVEL</div>
+        <div class="value" id="level">1</div>
+      </div>
+      <div class="hud-block right">
+        <div class="label">LIVES</div>
+        <div class="lives" id="lives">●●●</div>
+      </div>
+    </div>
+
+    <canvas id="game"></canvas>
+
+    <div class="overlay" id="startScreen">
+      <div class="badge">A PAC-MAN-LIKE</div>
+      <div class="title">REEF<span class="accent">RUNNER</span></div>
+      <div class="subtitle">You're a hungry little fish. Eat all the plankton. Dodge the jellyfish. Snag a glowing pearl to turn the tables and chomp them back.</div>
+      <div class="controls-grid">
+        <b>Move:</b><span>arrow keys / WASD</span>
+        <b>Mobile:</b><span>swipe in any direction</span>
+      </div>
+      <button class="btn" id="startBtn">DIVE IN</button>
+    </div>
+
+    <div class="overlay hidden" id="gameOverScreen">
+      <div class="title" style="font-size: clamp(28px, 6vw, 44px)">GAME OVER</div>
+      <div style="font-size:14px;color:var(--shallow);margin-top:8px">Final Score</div>
+      <div class="final-score" id="finalScore">0</div>
+      <button class="btn" id="restartBtn">SWIM AGAIN</button>
+    </div>
+
+    <div class="overlay hidden" id="winScreen">
+      <div class="title" style="font-size: clamp(28px, 6vw, 44px)">LEVEL<span class="accent" id="winLevelTxt">CLEARED</span></div>
+      <div style="font-size:16px;margin:16px 0 24px">The reef is ready for a deeper dive...</div>
+      <button class="btn" id="nextBtn">CONTINUE</button>
+    </div>
+  </div>
+
+<script>
+(() => {
+  // === MAZE ===
+  // 1 = wall, 0 = plankton, 2 = empty, 3 = power pearl, 4 = ghost spawn
+  // 21 cols x 23 rows. Symmetric maze inspired by classic arcade layouts.
+  const MAZE = [
+    "111111111111111111111",
+    "100000000010000000001",
+    "131110110010110111131",
+    "100000000000000000001",
+    "101110101110101110101",
+    "100000100010001000001",
+    "111110111010111011111",
+    "222210100000001012222",
+    "111110101111101011111",
+    "222220104444401022222",
+    "111110101111101011111",
+    "222210100000001012222",
+    "111110101110101011111",
+    "100000000010000000001",
+    "101110110010110111101",
+    "130010000000000001031",
+    "111010101110101010111",
+    "100000100010001000001",
+    "101111111010111111101",
+    "100000000000000000001",
+    "101111110111011111101",
+    "100000000000000000001",
+    "111111111111111111111",
+  ];
+
+  const COLS = MAZE[0].length;
+  const ROWS = MAZE.length;
+  const TILE = 22; // logical pixels per tile
+  const W = COLS * TILE;
+  const H = ROWS * TILE;
+
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  canvas.width = W;
+  canvas.height = H;
+
+  // UI refs
+  const scoreEl = document.getElementById('score');
+  const levelEl = document.getElementById('level');
+  const livesEl = document.getElementById('lives');
+  const finalScoreEl = document.getElementById('finalScore');
+  const startScreen = document.getElementById('startScreen');
+  const gameOverScreen = document.getElementById('gameOverScreen');
+  const winScreen = document.getElementById('winScreen');
+  const startBtn = document.getElementById('startBtn');
+  const restartBtn = document.getElementById('restartBtn');
+  const nextBtn = document.getElementById('nextBtn');
+
+  // === GAME STATE ===
+  let grid;            // 2d array of cells (mutable: plankton gets eaten)
+  let plankton;        // remaining plankton count
+  let player;
+  let jellies;
+  let particles;
+  let score = 0;
+  let lives = 3;
+  let level = 1;
+  let powerTimer = 0;  // frames remaining of "power pearl" mode
+  let running = false;
+  let frame = 0;
+
+  // Directions: 0=right, 1=down, 2=left, 3=up
+  const DIRS = [
+    { x: 1, y: 0 }, { x: 0, y: 1 }, { x: -1, y: 0 }, { x: 0, y: -1 }
+  ];
+
+  function buildGrid() {
+    grid = [];
+    plankton = 0;
+    const spawns = [];
+    for (let r = 0; r < ROWS; r++) {
+      const row = [];
+      for (let c = 0; c < COLS; c++) {
+        const ch = MAZE[r][c];
+        let cell = parseInt(ch);
+        if (cell === 4) { spawns.push({ r, c }); cell = 2; }
+        if (cell === 0) plankton++;
+        row.push(cell);
+      }
+      grid.push(row);
+    }
+    return spawns;
+  }
+
+  function tileAt(x, y) {
+    const c = Math.floor(x / TILE);
+    const r = Math.floor(y / TILE);
+    if (r < 0 || r >= ROWS || c < 0 || c >= COLS) return 1;
+    return grid[r][c];
+  }
+
+  function isWall(c, r) {
+    if (r < 0 || r >= ROWS) return true;
+    // tunnel wraparound: column out of bounds is open
+    if (c < 0 || c >= COLS) return false;
+    return grid[r][c] === 1;
+  }
+
+  // Player can change direction only when aligned to a tile center and the next tile in that dir is open.
+  function aligned(entity) {
+    const cx = entity.x % TILE;
+    const cy = entity.y % TILE;
+    return Math.abs(cx - TILE / 2) < entity.speed && Math.abs(cy - TILE / 2) < entity.speed;
+  }
+
+  function snapToTile(entity) {
+    entity.x = Math.floor(entity.x / TILE) * TILE + TILE / 2;
+    entity.y = Math.floor(entity.y / TILE) * TILE + TILE / 2;
+  }
+
+  function canMove(entity, dir) {
+    const nx = entity.x + DIRS[dir].x * TILE / 2;
+    const ny = entity.y + DIRS[dir].y * TILE / 2;
+    const c = Math.floor(nx / TILE);
+    const r = Math.floor(ny / TILE);
+    return !isWall(c, r);
+  }
+
+  // === RESET / START ===
+  function resetEntities(spawns) {
+    // Find a good player spawn — bottom-center-ish open tile
+    let pSpawn = { r: 17, c: 10 };
+    // walk down rows looking for a 0/2 cell near col 10
+    for (let r = 17; r < ROWS - 1; r++) {
+      if (grid[r][10] !== 1) { pSpawn = { r, c: 10 }; break; }
+    }
+
+    player = {
+      x: pSpawn.c * TILE + TILE / 2,
+      y: pSpawn.r * TILE + TILE / 2,
+      dir: 2,
+      nextDir: 2,
+      speed: 2,
+      mouth: 0
+    };
+
+    const colors = ['#ff6b6b', '#c77dff', '#06d6a0', '#ffd166'];
+    jellies = [];
+    for (let i = 0; i < Math.min(4, spawns.length); i++) {
+      const s = spawns[i];
+      jellies.push({
+        x: s.c * TILE + TILE / 2,
+        y: s.r * TILE + TILE / 2,
+        homeR: s.r, homeC: s.c,
+        dir: Math.floor(Math.random() * 4),
+        speed: 1.6 + level * 0.1,
+        color: colors[i % colors.length],
+        scared: false,
+        eaten: false,
+        wobble: Math.random() * Math.PI * 2,
+        personality: i // 0=chaser, 1=ambush, 2=random, 3=patrol
+      });
+    }
+
+    particles = [];
+  }
+
+  function startLevel(reset = false) {
+    if (reset) { score = 0; lives = 3; level = 1; }
+    const spawns = buildGrid();
+    resetEntities(spawns);
+    powerTimer = 0;
+    running = true;
+    updateHUD();
+    [startScreen, gameOverScreen, winScreen].forEach(s => s.classList.add('hidden'));
+  }
+
+  function updateHUD() {
+    scoreEl.textContent = score;
+    levelEl.textContent = level;
+    livesEl.textContent = '●'.repeat(lives) || '—';
+  }
+
+  // === INPUT ===
+  const keyToDir = {
+    ArrowRight: 0, ArrowDown: 1, ArrowLeft: 2, ArrowUp: 3,
+    d: 0, s: 1, a: 2, w: 3, D: 0, S: 1, A: 2, W: 3
+  };
+  window.addEventListener('keydown', e => {
+    if (e.key in keyToDir) {
+      player && (player.nextDir = keyToDir[e.key]);
+      if (['ArrowRight','ArrowDown','ArrowLeft','ArrowUp'].includes(e.key)) e.preventDefault();
+    }
+  });
+
+  // touch swipe
+  let touchStart = null;
+  canvas.addEventListener('touchstart', e => {
+    const t = e.touches[0];
+    touchStart = { x: t.clientX, y: t.clientY };
+  });
+  canvas.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+  canvas.addEventListener('touchend', e => {
+    if (!touchStart) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - touchStart.x;
+    const dy = t.clientY - touchStart.y;
+    if (Math.abs(dx) < 20 && Math.abs(dy) < 20) return;
+    if (Math.abs(dx) > Math.abs(dy)) player.nextDir = dx > 0 ? 0 : 2;
+    else player.nextDir = dy > 0 ? 1 : 3;
+    touchStart = null;
+  });
+
+  // === UPDATE ===
+  function update() {
+    frame++;
+    if (powerTimer > 0) powerTimer--;
+
+    updatePlayer();
+    updateJellies();
+    updateParticles();
+
+    if (plankton <= 0) winLevel();
+  }
+
+  function updatePlayer() {
+    // try to switch direction at tile centers
+    if (canMove(player, player.nextDir)) {
+      // but only when reasonably aligned
+      const cx = player.x % TILE;
+      const cy = player.y % TILE;
+      const nearCenter = Math.abs(cx - TILE / 2) < player.speed * 1.5 && Math.abs(cy - TILE / 2) < player.speed * 1.5;
+      if (nearCenter || player.nextDir === player.dir) {
+        if (player.nextDir !== player.dir) snapToTile(player);
+        player.dir = player.nextDir;
+      }
+    }
+
+    if (canMove(player, player.dir)) {
+      player.x += DIRS[player.dir].x * player.speed;
+      player.y += DIRS[player.dir].y * player.speed;
+      player.mouth += 0.25;
+    }
+
+    // tunnel wrap
+    if (player.x < 0) player.x = W - 1;
+    else if (player.x > W) player.x = 1;
+
+    // eat
+    const c = Math.floor(player.x / TILE);
+    const r = Math.floor(player.y / TILE);
+    if (r >= 0 && r < ROWS && c >= 0 && c < COLS) {
+      const cell = grid[r][c];
+      if (cell === 0) {
+        grid[r][c] = 2;
+        plankton--;
+        score += 10;
+        updateHUD();
+      } else if (cell === 3) {
+        grid[r][c] = 2;
+        score += 50;
+        powerTimer = 60 * 7; // 7 seconds at 60fps
+        jellies.forEach(j => { if (!j.eaten) j.scared = true; });
+        burst(player.x, player.y, '#f7f7ff', 20);
+        updateHUD();
+      }
+    }
+
+    // collisions with jellies
+    jellies.forEach(j => {
+      const dx = j.x - player.x, dy = j.y - player.y;
+      if (dx*dx + dy*dy < (TILE * 0.7) ** 2) {
+        if (j.eaten) return;
+        if (j.scared) {
+          j.eaten = true;
+          j.scared = false;
+          score += 200;
+          burst(j.x, j.y, j.color, 24);
+          updateHUD();
+        } else {
+          loseLife();
+        }
+      }
+    });
+  }
+
+  function loseLife() {
+    lives--;
+    burst(player.x, player.y, '#ffd166', 30);
+    updateHUD();
+    if (lives <= 0) {
+      gameOver();
+    } else {
+      // respawn — keep maze, reset positions
+      const spawns = [];
+      for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (MAZE[r][c] === '4') spawns.push({ r, c });
+      resetEntities(spawns);
+      powerTimer = 0;
+    }
+  }
+
+  function updateJellies() {
+    jellies.forEach(j => {
+      j.wobble += 0.15;
+      const speed = j.eaten ? 3 : (j.scared ? j.speed * 0.6 : j.speed);
+
+      // Choose direction at tile centers
+      const cx = j.x % TILE;
+      const cy = j.y % TILE;
+      const atCenter = Math.abs(cx - TILE / 2) < speed && Math.abs(cy - TILE / 2) < speed;
+
+      if (atCenter) {
+        snapToTile(j);
+        // possible directions (no reversing unless dead-end)
+        const opposite = (j.dir + 2) % 4;
+        let options = [0, 1, 2, 3].filter(d => d !== opposite && canMove(j, d));
+        if (options.length === 0) options = [opposite];
+
+        // pick a target tile
+        let target;
+        if (j.eaten) {
+          target = { x: j.homeC * TILE + TILE / 2, y: j.homeR * TILE + TILE / 2 };
+          // arrived home? respawn
+          if (Math.abs(j.x - target.x) < TILE && Math.abs(j.y - target.y) < TILE) {
+            j.eaten = false;
+            j.scared = false;
+          }
+        } else if (j.scared) {
+          // run away from player
+          target = { x: 2 * j.x - player.x, y: 2 * j.y - player.y };
+        } else {
+          // each personality targets differently
+          if (j.personality === 0) {
+            target = { x: player.x, y: player.y };
+          } else if (j.personality === 1) {
+            // ambush — aim 4 tiles ahead of player
+            target = {
+              x: player.x + DIRS[player.dir].x * TILE * 4,
+              y: player.y + DIRS[player.dir].y * TILE * 4
+            };
+          } else if (j.personality === 2) {
+            // random-ish
+            if (Math.random() < 0.4) {
+              j.dir = options[Math.floor(Math.random() * options.length)];
+              j.x += DIRS[j.dir].x * speed;
+              j.y += DIRS[j.dir].y * speed;
+              return;
+            }
+            target = { x: player.x, y: player.y };
+          } else {
+            // patrol corner unless close
+            const dist = Math.hypot(j.x - player.x, j.y - player.y);
+            target = dist < TILE * 6
+              ? { x: 0, y: H }
+              : { x: player.x, y: player.y };
+          }
+        }
+
+        // pick option closest to target
+        let best = options[0], bestDist = Infinity;
+        for (const d of options) {
+          const nx = j.x + DIRS[d].x * TILE;
+          const ny = j.y + DIRS[d].y * TILE;
+          const dx = nx - target.x, dy = ny - target.y;
+          const dist = dx*dx + dy*dy;
+          if (dist < bestDist) { bestDist = dist; best = d; }
+        }
+        j.dir = best;
+      }
+
+      if (canMove(j, j.dir)) {
+        j.x += DIRS[j.dir].x * speed;
+        j.y += DIRS[j.dir].y * speed;
+      }
+
+      // tunnel wrap
+      if (j.x < 0) j.x = W - 1;
+      else if (j.x > W) j.x = 1;
+    });
+  }
+
+  function burst(x, y, color, count = 12) {
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const s = Math.random() * 3 + 0.5;
+      particles.push({
+        x, y,
+        vx: Math.cos(a) * s,
+        vy: Math.sin(a) * s,
+        life: 30 + Math.random() * 20,
+        maxLife: 50,
+        color,
+        size: Math.random() * 3 + 1
+      });
+    }
+  }
+
+  function updateParticles() {
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vx *= 0.96;
+      p.vy *= 0.96;
+      p.life--;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+  }
+
+  // === DRAW ===
+  function draw() {
+    // background
+    ctx.fillStyle = '#02132b';
+    ctx.fillRect(0, 0, W, H);
+
+    drawMaze();
+    drawPellets();
+    drawParticles();
+    drawJellies();
+    drawPlayer();
+    drawPowerOverlay();
+  }
+
+  function drawMaze() {
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        if (grid[r][c] !== 1) continue;
+        const x = c * TILE, y = r * TILE;
+
+        // Coral-tinted wall blocks with neon outline
+        ctx.fillStyle = '#0a3d62';
+        ctx.fillRect(x, y, TILE, TILE);
+
+        // inner highlight
+        ctx.fillStyle = '#0fa3b1';
+        ctx.fillRect(x + 2, y + 2, TILE - 4, TILE - 4);
+
+        ctx.fillStyle = '#02132b';
+        ctx.fillRect(x + 5, y + 5, TILE - 10, TILE - 10);
+      }
+    }
+
+    // glow outline pass
+    ctx.strokeStyle = 'rgba(15, 163, 177, 0.5)';
+    ctx.lineWidth = 1;
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        if (grid[r][c] !== 1) continue;
+        // only stroke edges that face open space
+        const x = c * TILE, y = r * TILE;
+        if (!isWall(c, r - 1)) { ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + TILE, y); ctx.stroke(); }
+        if (!isWall(c, r + 1)) { ctx.beginPath(); ctx.moveTo(x, y + TILE); ctx.lineTo(x + TILE, y + TILE); ctx.stroke(); }
+        if (!isWall(c - 1, r)) { ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y + TILE); ctx.stroke(); }
+        if (!isWall(c + 1, r)) { ctx.beginPath(); ctx.moveTo(x + TILE, y); ctx.lineTo(x + TILE, y + TILE); ctx.stroke(); }
+      }
+    }
+  }
+
+  function drawPellets() {
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const cell = grid[r][c];
+        const cx = c * TILE + TILE / 2;
+        const cy = r * TILE + TILE / 2;
+        if (cell === 0) {
+          ctx.fillStyle = '#ffd166';
+          ctx.beginPath();
+          ctx.arc(cx, cy, 2, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (cell === 3) {
+          // glowing pearl
+          const pulse = 0.7 + Math.sin(frame * 0.15) * 0.3;
+          const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, TILE * 0.8);
+          g.addColorStop(0, 'rgba(247, 247, 255, ' + (0.6 * pulse) + ')');
+          g.addColorStop(1, 'rgba(247, 247, 255, 0)');
+          ctx.fillStyle = g;
+          ctx.fillRect(cx - TILE, cy - TILE, TILE * 2, TILE * 2);
+          ctx.fillStyle = '#f7f7ff';
+          ctx.beginPath();
+          ctx.arc(cx, cy, 5 + pulse * 1.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+  }
+
+  function drawPlayer() {
+    const p = player;
+    const r = TILE * 0.45;
+    const open = Math.abs(Math.sin(p.mouth)) * 0.35 + 0.05;
+    const angle = p.dir * Math.PI / 2;
+
+    // glow trail
+    const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 2);
+    g.addColorStop(0, 'rgba(255, 209, 102, 0.4)');
+    g.addColorStop(1, 'rgba(255, 209, 102, 0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(p.x - r * 2, p.y - r * 2, r * 4, r * 4);
+
+    // fish body (round) with mouth wedge
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(angle);
+
+    // tail
+    ctx.fillStyle = '#ffb703';
+    ctx.beginPath();
+    ctx.moveTo(-r * 0.7, 0);
+    ctx.lineTo(-r * 1.3, -r * 0.6);
+    ctx.lineTo(-r * 1.3, r * 0.6);
+    ctx.closePath();
+    ctx.fill();
+
+    // body
+    ctx.fillStyle = '#ffd166';
+    ctx.beginPath();
+    ctx.arc(0, 0, r, open, Math.PI * 2 - open);
+    ctx.lineTo(0, 0);
+    ctx.closePath();
+    ctx.fill();
+
+    // eye
+    ctx.fillStyle = '#02132b';
+    ctx.beginPath();
+    ctx.arc(r * 0.3, -r * 0.4, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(r * 0.35, -r * 0.45, 1, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  function drawJellies() {
+    jellies.forEach(j => {
+      const r = TILE * 0.42;
+      const wob = Math.sin(j.wobble) * 2;
+      const flashing = j.scared && powerTimer < 120 && Math.floor(frame / 10) % 2 === 0;
+      const bodyColor = j.eaten ? 'rgba(224, 251, 252, 0.3)'
+        : j.scared ? (flashing ? '#f7f7ff' : '#3a86ff')
+        : j.color;
+
+      if (j.eaten) {
+        // just two eyes drifting home
+        ctx.fillStyle = '#fff';
+        ctx.beginPath(); ctx.arc(j.x - 4, j.y, 3, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(j.x + 4, j.y, 3, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#0a3d62';
+        ctx.beginPath(); ctx.arc(j.x - 4 + DIRS[j.dir].x, j.y + DIRS[j.dir].y, 1.2, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(j.x + 4 + DIRS[j.dir].x, j.y + DIRS[j.dir].y, 1.2, 0, Math.PI * 2); ctx.fill();
+        return;
+      }
+
+      // glow
+      const g = ctx.createRadialGradient(j.x, j.y, 0, j.x, j.y, r * 1.8);
+      g.addColorStop(0, bodyColor + (j.scared ? '' : '88'));
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(j.x - r * 2, j.y - r * 2, r * 4, r * 4);
+
+      // dome
+      ctx.fillStyle = bodyColor;
+      ctx.beginPath();
+      ctx.arc(j.x, j.y - 2, r, Math.PI, 0);
+      ctx.lineTo(j.x + r, j.y + r * 0.6);
+      // wavy bottom
+      for (let i = 4; i >= -4; i--) {
+        const tx = j.x + (i / 4) * r;
+        const ty = j.y + r * 0.6 + (i % 2 === 0 ? wob : -wob);
+        ctx.lineTo(tx, ty);
+      }
+      ctx.lineTo(j.x - r, j.y);
+      ctx.closePath();
+      ctx.fill();
+
+      // tentacles
+      ctx.strokeStyle = bodyColor;
+      ctx.lineWidth = 2;
+      for (let i = -2; i <= 2; i++) {
+        const sx = j.x + i * (r / 2.5);
+        ctx.beginPath();
+        ctx.moveTo(sx, j.y + r * 0.6);
+        ctx.quadraticCurveTo(sx + wob, j.y + r * 1.0, sx, j.y + r * 1.4 + wob);
+        ctx.stroke();
+      }
+
+      // eyes
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(j.x - 5, j.y - 2, 3.5, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(j.x + 5, j.y - 2, 3.5, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = j.scared ? '#ff4d6d' : '#02132b';
+      const ex = DIRS[j.dir].x, ey = DIRS[j.dir].y;
+      ctx.beginPath(); ctx.arc(j.x - 5 + ex, j.y - 2 + ey, 1.5, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(j.x + 5 + ex, j.y - 2 + ey, 1.5, 0, Math.PI * 2); ctx.fill();
+    });
+  }
+
+  function drawParticles() {
+    particles.forEach(p => {
+      ctx.globalAlpha = Math.max(0, p.life / p.maxLife);
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+  }
+
+  function drawPowerOverlay() {
+    if (powerTimer <= 0) return;
+    ctx.fillStyle = `rgba(58, 134, 255, ${0.05 + Math.sin(frame * 0.2) * 0.03})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // === MAIN LOOP ===
+  function loop() {
+    if (running) update();
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  function gameOver() {
+    running = false;
+    finalScoreEl.textContent = score;
+    gameOverScreen.classList.remove('hidden');
+  }
+
+  function winLevel() {
+    running = false;
+    level++;
+    document.getElementById('winLevelTxt').textContent = ' ' + (level - 1) + ' CLEARED';
+    winScreen.classList.remove('hidden');
+  }
+
+  // Buttons
+  startBtn.addEventListener('click', () => startLevel(true));
+  restartBtn.addEventListener('click', () => startLevel(true));
+  nextBtn.addEventListener('click', () => startLevel(false));
+
+  // Ambient bubbles in DOM (purely decorative)
+  function spawnBubble() {
+    const b = document.createElement('div');
+    b.className = 'bubble';
+    const size = 4 + Math.random() * 14;
+    b.style.width = b.style.height = size + 'px';
+    b.style.left = Math.random() * 100 + '%';
+    b.style.animationDuration = (8 + Math.random() * 8) + 's';
+    document.body.appendChild(b);
+    setTimeout(() => b.remove(), 18000);
+  }
+  setInterval(spawnBubble, 600);
+
+  // Initial draw of empty state behind start screen
+  buildGrid();
+  resetEntities([]);
+  loop();
+})();
+</script>
+</body>
+</html>
